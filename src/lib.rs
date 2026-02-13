@@ -110,13 +110,22 @@ impl<DB: sqlx::Database> PoolBuilder<DB> {
 /// An asynchronous pool of SQLx database connections with tracing instrumentation.
 ///
 /// Wraps a SQLx [`Pool`] and propagates tracing attributes to all acquired connections.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Pool<DB>
 where
     DB: sqlx::Database,
 {
     inner: sqlx::Pool<DB>,
     attributes: Arc<Attributes>,
+}
+
+impl<DB: sqlx::Database> Clone for Pool<DB> {
+    fn clone(&self) -> Self {
+        Pool {
+            inner: self.inner.clone(),
+            attributes: self.attributes.clone(),
+        }
+    }
 }
 
 impl<DB> From<sqlx::Pool<DB>> for Pool<DB>
@@ -127,6 +136,14 @@ where
     /// Convert a SQLx [`Pool`] into a tracing-instrumented [`Pool`].
     fn from(inner: sqlx::Pool<DB>) -> Self {
         PoolBuilder::from(inner).build()
+    }
+}
+
+impl<DB: sqlx::Database> std::ops::Deref for Pool<DB> {
+    type Target = sqlx::Pool<DB>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -150,6 +167,11 @@ where
             attributes: self.attributes.clone(),
             inner,
         })
+    }
+
+    /// Consume this wrapper and return the underlying [`sqlx::Pool`].
+    pub fn into_inner(self) -> sqlx::Pool<DB> {
+        self.inner
     }
 }
 
@@ -182,6 +204,27 @@ where
     attributes: Arc<Attributes>,
 }
 
+impl<DB: sqlx::Database> std::ops::Deref for PoolConnection<DB> {
+    type Target = DB::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<DB: sqlx::Database> std::ops::DerefMut for PoolConnection<DB> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<DB: sqlx::Database> PoolConnection<DB> {
+    /// Consume this wrapper and return the underlying [`sqlx::pool::PoolConnection`].
+    pub fn into_inner(self) -> sqlx::pool::PoolConnection<DB> {
+        self.inner
+    }
+}
+
 /// An in-progress database transaction or savepoint, instrumented for tracing.
 ///
 /// Wraps a SQLx [`Transaction`] and propagates tracing attributes.
@@ -192,4 +235,47 @@ where
 {
     inner: sqlx::Transaction<'c, DB>,
     attributes: Arc<Attributes>,
+}
+
+impl<'c, DB: sqlx::Database> std::ops::Deref for Transaction<'c, DB> {
+    type Target = DB::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'c, DB: sqlx::Database> std::ops::DerefMut for Transaction<'c, DB> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<'c, DB: sqlx::Database> Transaction<'c, DB> {
+    /// Commits this transaction or savepoint.
+    ///
+    /// This is a by-value method that cannot be called through `Deref`.
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        self.inner.commit().await
+    }
+
+    /// Aborts this transaction or savepoint.
+    ///
+    /// This is a by-value method that cannot be called through `Deref`.
+    pub async fn rollback(self) -> Result<(), sqlx::Error> {
+        self.inner.rollback().await
+    }
+
+    /// Returns a mutable reference to the underlying [`sqlx::Transaction`].
+    ///
+    /// Useful for passing to functions that accept `&mut sqlx::Transaction`
+    /// while keeping the wrapper alive for `commit()`/`rollback()`.
+    pub fn as_inner_mut(&mut self) -> &mut sqlx::Transaction<'c, DB> {
+        &mut self.inner
+    }
+
+    /// Consume this wrapper and return the underlying [`sqlx::Transaction`].
+    pub fn into_inner(self) -> sqlx::Transaction<'c, DB> {
+        self.inner
+    }
 }
