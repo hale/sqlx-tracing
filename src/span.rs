@@ -86,3 +86,41 @@ pub fn record_error(err: &sqlx::Error) {
     span.record("error.message", err.to_string());
     span.record("error.stacktrace", format!("{err:?}"));
 }
+
+/// A query taken apart so its SQL can be recorded on the span before it runs,
+/// since [`sqlx::Execute::sql`] consumes the query.
+pub(crate) struct Traced<DB: sqlx::Database> {
+    pub(crate) sql: sqlx::SqlStr,
+    arguments: Result<Option<DB::Arguments>, sqlx::error::BoxDynError>,
+    persistent: bool,
+}
+
+impl<DB: sqlx::Database> Traced<DB> {
+    pub(crate) fn new<'q, E: sqlx::Execute<'q, DB>>(mut query: E) -> Self {
+        let persistent = query.persistent();
+        let arguments = query.take_arguments();
+        Self {
+            sql: query.sql(),
+            arguments,
+            persistent,
+        }
+    }
+}
+
+impl<'q, DB: sqlx::Database> sqlx::Execute<'q, DB> for Traced<DB> {
+    fn sql(self) -> sqlx::SqlStr {
+        self.sql
+    }
+
+    fn statement(&self) -> Option<&DB::Statement> {
+        None
+    }
+
+    fn take_arguments(&mut self) -> Result<Option<DB::Arguments>, sqlx::error::BoxDynError> {
+        std::mem::replace(&mut self.arguments, Ok(None))
+    }
+
+    fn persistent(&self) -> bool {
+        self.persistent
+    }
+}
